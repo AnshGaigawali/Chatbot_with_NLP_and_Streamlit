@@ -4,4 +4,3 @@ joblib
 nltk
 pandas
 numpy
-ssl
