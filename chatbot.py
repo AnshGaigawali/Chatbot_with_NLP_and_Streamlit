@@ -106,7 +106,8 @@ def main():
     st.sidebar.markdown("---")
 
     # file path for chat log
-    log_file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv")
+    #log_file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv")
+    log_file_path = os.path.join(os.path.dirname(__file__), 'chat_log.csv')
 
     if not os.path.exists(log_file_path):
         print("Creating chat log file...")
