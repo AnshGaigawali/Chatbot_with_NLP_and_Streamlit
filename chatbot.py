@@ -20,7 +20,7 @@ nltk.download('punkt')
 
 # load intents from JSON
 def load_data():
-    file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/top_1000_anime.json")
+    file_path = os.path.abspath("top_1000_anime.json")
     try:
         print("Loading data from JSON file...")
         with open(file_path, "r", encoding="utf-8") as file:
@@ -47,8 +47,8 @@ def load_data():
     return tags, patterns, responses
 
 # define paths for saved model and vectorizer
-model_path = 'C:/Users/USER/Desktop/Project/ChatBot/chatbot_model1.pkl'
-vectorizer_path = 'C:/Users/USER/Desktop/Project/ChatBot/vectorizer1.pkl'
+model_path = 'chatbot_model1.pkl'
+vectorizer_path = 'vectorizer1.pkl'
 
 # initialize variables to avoid "missing pattern" previous bug
 tags, patterns, responses = load_data()
