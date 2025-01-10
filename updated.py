@@ -1,33 +1,32 @@
 import os
 import json
 import datetime
-import csv
 import re
 import streamlit as st
-import ssl
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_similarity
 import joblib
 import nltk
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
+from pymongo import MongoClient
+import bcrypt
+from dotenv import load_dotenv
+import csv
 
 # Handle SSL issues
+import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# download NLTK data
+# Download NLTK data
 nltk.data.path.append(os.path.abspath("nltk_data"))
 nltk.download('punkt')
 
-# load intents from JSON
+# Load intents from JSON
 def load_data():
     file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/top_1000_anime.json")
     try:
-        print("Loading data from JSON file...")
         with open(file_path, "r", encoding="utf-8") as file:
             intents = json.load(file)
-        print("Data loaded successfully.")
     except FileNotFoundError:
         st.error("JSON file not found. Please ensure the file path is correct.")
         return [], [], []
@@ -40,33 +39,26 @@ def load_data():
     responses = []
     for intent in intents:
         for pattern in intent['patterns']:
-            if pattern:  # Ensure patterns are not empty
+            if pattern:
                 tags.append(intent['tag'])
-                patterns.append(pattern.lower())  # Convert to lowercase
-                responses.append(intent['responses'])  # Collect all responses
-
-    print("Data processed successfully.")
+                patterns.append(pattern.lower())
+                responses.append(intent['responses'])
     return tags, patterns, responses
 
-# define paths for saved model and vectorizer
+# Define paths for saved model and vectorizer
 model_path = 'C:/Users/USER/Desktop/Project/ChatBot/chatbot_model1.pkl'
 vectorizer_path = 'C:/Users/USER/Desktop/Project/ChatBot/vectorizer1.pkl'
-
-# initialize variables to avoid "missing pattern" previous bug
 tags, patterns, responses = load_data()
 
-# check if the model and vectorizer exist or train and save them
+# Check if the model and vectorizer exist, or train and save them
 if os.path.exists(model_path) and os.path.exists(vectorizer_path):
     try:
-        print("Loading existing model and vectorizer...")
         clf = joblib.load(model_path)
         vectorizer = joblib.load(vectorizer_path)
-        print("Model and vectorizer loaded successfully.")
     except Exception as e:
         st.error(f"Error loading model/vectorizer: {e}")
 else:
     try:
-        print("Training new model and vectorizer...")
         vectorizer = TfidfVectorizer()
         clf = LogisticRegression(random_state=0, max_iter=10000)
 
@@ -76,7 +68,6 @@ else:
 
         joblib.dump(clf, model_path)
         joblib.dump(vectorizer, vectorizer_path)
-        print("Model and vectorizer trained and saved successfully.")
     except Exception as e:
         st.error(f"Error training model/vectorizer: {e}")
 
@@ -92,45 +83,57 @@ def find_best_response(input_text):
     similarities = cosine_similarity(input_vec, vectorizer.transform(patterns)).flatten()
     max_similarity_index = similarities.argmax()
     best_response = "\n".join(responses[max_similarity_index])
-
     return best_response
 
-# Initialize Firebase
-cred = credentials.Certificate("C:/Users/USER/Desktop/Project/ChatBot/google-services.json")
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+# Load environment variables
+load_dotenv()
+connection_string = os.getenv("MONGODB_URI")
+
+# MongoDB setup
+client = MongoClient(connection_string)
+db = client['anime_chatbot']
+users_collection = db['users']
 
 def signup(email, password):
-    try:
-        user = auth.create_user(email=email, password=password)
-        st.success(f"Account created for {email}")
-    except Exception as e:
-        st.error(f"Error creating account: {e}")
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    user = {
+        "email": email,
+        "password": hashed_password
+    }
+    users_collection.insert_one(user)
+    st.success(f"Account created for {email}")
 
 def login(email, password):
-    try:
-        user = auth.get_user_by_email(email)
+    user = users_collection.find_one({"email": email})
+    if user and bcrypt.checkpw(password.encode('utf-8'), user["password"]):
         st.success(f"Logged in as {email}")
-        return user.uid
-    except Exception as e:
-        st.error(f"Error logging in: {e}")
+        return str(user["_id"])
+    else:
+        st.error("Invalid credentials")
         return None
 
-def chatbot(input_text, user_id):
+def chatbot(input_text, user_id=None):
     response = find_best_response(input_text)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    db.collection("users").document(user_id).collection("history").add({
-        "user_input": input_text,
-        "response": response,
-        "timestamp": timestamp
-    })
+    log_file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv")
+    if user_id:
+        users_collection.update_one(
+            {"_id": user_id},
+            {"$push": {"history": {"user_input": input_text, "response": response, "timestamp": timestamp}}}
+        )
+    else:
+        with open(log_file_path, 'a', newline='', encoding='utf-8') as csvfile:
+            csv_writer = csv.writer(csvfile)
+            csv_writer.writerow([input_text, response, timestamp])
     return response
 
 def main():
     st.title("Anime Chatbot with NLP and Streamlit")
     menu = ["Home", "Login", "Signup", "Conversation History", "Delete History", "About"]
     choice = st.sidebar.selectbox("Menu", menu)
-    st.sidebar.markdown("---")
+    st.sidebar.divider()
+    
+    log_file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv")
 
     if "user_id" not in st.session_state:
         st.session_state["user_id"] = None
@@ -139,55 +142,65 @@ def main():
         st.subheader("Create Account")
         email = st.text_input("Email")
         password = st.text_input("Password", type='password')
-
         if st.button("Signup"):
             signup(email, password)
-
+    
     if choice == "Login":
         st.subheader("Login")
         email = st.text_input("Email")
         password = st.text_input("Password", type='password')
-
         if st.button("Login"):
             user_id = login(email, password)
             if user_id:
                 st.session_state["user_id"] = user_id
 
-    if st.session_state["user_id"]:
+    if choice == "Home":
         st.subheader("Welcome to the Anime Chatbot. Write the name of the anime you want to know about.")
         user_input = st.text_input("You:")
         response = ""
-
         if user_input:
-            with st.spinner("Processing..."):
-                response = chatbot(user_input, st.session_state["user_id"])
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                db.collection("users").document(st.session_state["user_id"]).collection("history").add({
-                    "user_input": user_input,
-                    "response": response,
-                    "timestamp": timestamp
-                })
+            response = chatbot(user_input, st.session_state["user_id"])
+            st.text_area("Chatbot:", value=response, height=200)
 
-            st.success("Received your input! Here's the response:")
-            st.text_area("Chatbot:", value=response, height=200, max_chars=None)
-
-    elif choice == "Conversation History" and st.session_state["user_id"]:
+    elif choice == "Conversation History":
         st.header("Conversation History")
-        user_history = db.collection("users").document(st.session_state["user_id"]).collection("history").get()
-        for doc in user_history:
-            history = doc.to_dict()
-            st.text(f"User: {history['user_input']}\nChatbot: {history['response']}\nTimestamp: {history['timestamp']}")
-            st.markdown("---")
+        if st.session_state["user_id"]:
+            user_history = users_collection.find_one({"_id": st.session_state["user_id"]})["history"]
+            if user_history:
+                for history in user_history:
+                    st.text(f"User: {history['user_input']}\nChatbot: {history['response']}\nTimestamp: {history['timestamp']}")
+                    st.markdown("---")
+            else:
+                st.warning("No conversation history found for this user.")
+        else:
+            if os.path.exists(log_file_path):
+                with open(log_file_path, 'r', encoding='utf-8') as csvfile:
+                    csv_reader = csv.reader(csvfile)
+                    next(csv_reader)
+                    for row in csv_reader:
+                        st.text(f"User: {row[0]}\nChatbot: {row[1]}\nTimestamp: {row[2]}")
+                        st.markdown("---")
+            else:
+                st.warning("No conversation history found.")
 
-    elif choice == "Delete History" and st.session_state["user_id"]:
+    elif choice == "Delete History":
         st.header("Delete Conversation History")
         if st.button("Delete history"):
-            user_history_ref = db.collection("users").document(st.session_state["user_id"]).collection("history")
-            user_history = user_history_ref.get()
-            for doc in user_history:
-                user_history_ref.document(doc.id).delete()
-            st.success("Conversation history deleted")
-            print("Conversation history deleted.")
+            if st.session_state["user_id"]:
+                users_collection.update_one(
+                    {"_id": st.session_state["user_id"]},
+                    {"$set": {"history": []}}
+                )
+                st.success("Conversation history deleted for the current user.")
+            else:
+                if os.path.exists(log_file_path):
+                    os.remove(log_file_path)
+                    with open(log_file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        csv_writer = csv.writer(csvfile)
+                        csv_writer.writerow(['User Input', 'Chatbot Response', 'Timestamp'])
+                    st.success("CSV conversation history deleted and recreated.")
+                else:
+                    st.warning("No conversation history found to delete.")
 
     elif choice == "About":
         st.write("This project demonstrates an anime-specific chatbot built using NLP techniques.")
@@ -203,8 +216,6 @@ def main():
         """)
         st.subheader("Additional Information:")
         st.write("Feel free to explore and ask about different anime titles!")
-
-        print("Displayed information about the project.")
 
 if __name__ == '__main__':
     main()
