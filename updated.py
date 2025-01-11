@@ -12,14 +12,24 @@ from pymongo import MongoClient
 import bcrypt
 from dotenv import load_dotenv
 import csv
-
-# Handle SSL issues
 import ssl
+import logging
+from bson.objectid import ObjectId
+
+# Ensure SSL context for HTTPS requests
 ssl._create_default_https_context = ssl._create_unverified_context
 
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Download NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
 nltk.data.path.append(os.path.abspath("nltk_data"))
-nltk.download('punkt')
 
 # Load intents from JSON
 def load_data():
@@ -87,11 +97,11 @@ def find_best_response(input_text):
 
 # Load environment variables
 load_dotenv()
-connection_string = os.getenv("MONGODB_URI")
+connection_string = "mongodb+srv://anshgaigawali:anshtini@cluster2.l7iru.mongodb.net/animechatbot?retryWrites=true&w=majority&appName=Cluster2"
 
 # MongoDB setup
 client = MongoClient(connection_string)
-db = client['anime_chatbot']
+db = client['animechatbot']
 users_collection = db['users']
 
 def signup(email, password):
@@ -100,11 +110,13 @@ def signup(email, password):
         "email": email,
         "password": hashed_password
     }
-    users_collection.insert_one(user)
+    result = users_collection.insert_one(user)
+    logger.info(f"User inserted with id: {result.inserted_id}")
     st.success(f"Account created for {email}")
 
 def login(email, password):
     user = users_collection.find_one({"email": email})
+    logger.debug(f"User login: {user}")
     if user and bcrypt.checkpw(password.encode('utf-8'), user["password"]):
         st.success(f"Logged in as {email}")
         return str(user["_id"])
@@ -116,9 +128,10 @@ def chatbot(input_text, user_id=None):
     response = find_best_response(input_text)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_file_path = os.path.abspath("C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv")
+
     if user_id:
         users_collection.update_one(
-            {"_id": user_id},
+            {"_id": ObjectId(user_id)},  # Assuming user_id is a valid ObjectId
             {"$push": {"history": {"user_input": input_text, "response": response, "timestamp": timestamp}}}
         )
     else:
@@ -165,8 +178,9 @@ def main():
     elif choice == "Conversation History":
         st.header("Conversation History")
         if st.session_state["user_id"]:
-            user_history = users_collection.find_one({"_id": st.session_state["user_id"]})["history"]
-            if user_history:
+            user_doc = users_collection.find_one({"_id": ObjectId(st.session_state["user_id"])})
+            if user_doc and "history" in user_doc:
+                user_history = user_doc["history"]
                 for history in user_history:
                     st.text(f"User: {history['user_input']}\nChatbot: {history['response']}\nTimestamp: {history['timestamp']}")
                     st.markdown("---")
@@ -188,7 +202,7 @@ def main():
         if st.button("Delete history"):
             if st.session_state["user_id"]:
                 users_collection.update_one(
-                    {"_id": st.session_state["user_id"]},
+                    {"_id": ObjectId(st.session_state["user_id"])},
                     {"$set": {"history": []}}
                 )
                 st.success("Conversation history deleted for the current user.")
@@ -209,9 +223,9 @@ def main():
         1. **Dataset**: The chatbot is trained on a dataset of over 1000 anime titles with various patterns and responses.
         
         2. **Model**: We use Logistic Regression to classify user queries into different anime categories.
-        
+
         3. **Interface**: The Streamlit interface allows users to interact with the chatbot seamlessly.
-        
+
         4. **Purpose**: The chatbot helps users find information about their favorite animes including details like title, type, description, and more.
         """)
         st.subheader("Additional Information:")
