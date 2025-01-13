@@ -9,10 +9,16 @@ import joblib
 import nltk
 from pymongo import MongoClient
 import bcrypt
-import csv
 import logging
-import datetime  # import datetime module
+import datetime
 from bson.objectid import ObjectId
+
+# Custom CSS
+def local_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+
+local_css("style.css")
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +28,6 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/chatbot_model1.pkl'
 VECTORIZER_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/vectorizer1.pkl'
 INTENT_FILE_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/top_1000_anime.json'
-LOG_FILE_PATH = "C:/Users/USER/Desktop/Project/ChatBot/chat_log.csv"
 DB_CONNECTION_STRING = "mongodb+srv://anshgaigawali:anshtini@cluster2.l7iru.mongodb.net/animechatbot?retryWrites=true&w=majority&appName=Cluster2"
 
 # Load NLTK data
@@ -96,6 +101,18 @@ def login(email, password):
     st.error("Invalid credentials")
     return None
 
+def logout():
+    st.session_state["user_id"] = None
+    st.success("You have been logged out successfully.")
+
+def delete_account(user_id):
+    result = users_collection.delete_one({"_id": ObjectId(user_id)})
+    if result.deleted_count > 0:
+        st.success("Account deleted successfully.")
+        st.session_state["user_id"] = None
+    else:
+        st.error("Failed to delete the account. Please try again.")
+
 def chatbot(input_text, user_id=None):
     response = find_best_response(input_text)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -104,43 +121,65 @@ def chatbot(input_text, user_id=None):
             {"_id": ObjectId(user_id)},
             {"$push": {"history": {"user_input": input_text, "response": response, "timestamp": timestamp}}}
         )
-    else:
-        with open(LOG_FILE_PATH, 'a', newline='', encoding='utf-8') as csvfile:
-            csv.writer(csvfile).writerow([input_text, response, timestamp])
     return response
 
+def authentication_page():
+    st.header("Anime Chatbot Authentication")
+
+    auth_mode = st.radio("Choose an option", ["Sign In", "Sign Up", "Logout"])
+
+    if auth_mode == "Sign In":
+        st.markdown("<h2 class='stSubheader'>Sign In</h2>", unsafe_allow_html=True)
+        with st.form(key='sign_in_form'):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type='password')
+            submit_button = st.form_submit_button(label='Sign In')
+            if submit_button:
+                user_id = login(email, password)
+                if user_id:
+                    st.session_state["user_id"] = user_id
+                
+    elif auth_mode == "Sign Up":
+        st.markdown("<h2 class='stSubheader'>Sign Up</h2>", unsafe_allow_html=True)
+        with st.form(key='sign_up_form'):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type='password')
+            submit_button = st.form_submit_button(label='Sign Up')
+            if submit_button:
+                signup(email, password)
+            
+    elif auth_mode == "Logout":
+        st.markdown("<h2 class='stSubheader'>Logout</h2>", unsafe_allow_html=True)
+        if st.session_state["user_id"]:
+            if st.button("Confirm Logout"):
+                logout()
+        else:
+            st.warning("You need to log in to log out.")
+
 def main():
-    st.title("Anime Chatbot with NLP and Streamlit")
-    menu = ["Home", "Login", "Signup", "Conversation History", "Delete History", "About"]
+    st.markdown("<h1 class='stHeader'>Anime Chatbot with NLP and Streamlit</h1>", unsafe_allow_html=True)
+    menu = ["Home", "Authentication", "Conversation History", "Delete History", "Delete Account", "About"]
     choice = st.sidebar.selectbox("Menu", menu)
+
     if "user_id" not in st.session_state:
         st.session_state["user_id"] = None
 
-    if choice == "Signup":
-        st.subheader("Create Account")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type='password')
-        if st.button("Signup"):
-            signup(email, password)
-
-    if choice == "Login":
-        st.subheader("Login")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type='password')
-        if st.button("Login"):
-            user_id = login(email, password)
-            if user_id:
-                st.session_state["user_id"] = user_id
+    if choice == "Authentication":
+        authentication_page()
 
     if choice == "Home":
-        st.subheader("Welcome to the Anime Chatbot. Write the name of the anime you want to know about.")
-        user_input = st.text_input("You:")
-        if user_input:
-            st.text_area("Chatbot:", value=chatbot(user_input, st.session_state["user_id"]), height=200)
-    
-    elif choice == "Conversation History":
-        st.header("Conversation History")
         if st.session_state["user_id"]:
+            st.header("Welcome to the Anime Chatbot. Write the name of the anime you want to know about.")
+            user_input = st.text_input("You:")
+            if user_input:
+                st.text_area("Chatbot:", value=chatbot(user_input, st.session_state["user_id"]), height=200)
+        else:
+            st.warning("You need to log in to chat with the bot.")
+            st.info("Please go to the Authentication section.")
+
+    elif choice == "Conversation History":
+        if st.session_state["user_id"]:
+            st.header("Conversation History")
             user_doc = users_collection.find_one({"_id": ObjectId(st.session_state["user_id"])})
             if user_doc and "history" in user_doc:
                 user_history = user_doc["history"]
@@ -150,33 +189,27 @@ def main():
             else:
                 st.warning("No conversation history found for this user.")
         else:
-            if os.path.exists(LOG_FILE_PATH):
-                with open(LOG_FILE_PATH, 'r', encoding='utf-8') as csvfile:
-                    csv_reader = csv.reader(csvfile)
-                    next(csv_reader)
-                    for row in csv_reader:
-                        st.text(f"User: {row[0]}\nChatbot: {row[1]}\nTimestamp: {row[2]}")
-                        st.markdown("---")
-            else:
-                st.warning("No conversation history found.")
+            st.warning("You need to log in to see conversation history.")
 
     elif choice == "Delete History":
-        st.header("Delete Conversation History")
-        if st.button("Delete history"):
-            if st.session_state["user_id"]:
+        if st.session_state["user_id"]:
+            st.header("Delete Conversation History")
+            if st.button("Delete history"):
                 users_collection.update_one({"_id": ObjectId(st.session_state["user_id"])}, {"$set": {"history": []}})
                 st.success("Conversation history deleted for the current user.")
-            else:
-                if os.path.exists(LOG_FILE_PATH):
-                    os.remove(LOG_FILE_PATH)
-                    with open(LOG_FILE_PATH, 'w', newline='', encoding='utf-8') as csvfile:
-                        csv_writer = csv.writer(csvfile)
-                        csv_writer.writerow(['User Input', 'Chatbot Response', 'Timestamp'])
-                    st.success("CSV conversation history deleted and recreated.")
-                else:
-                    st.warning("No conversation history found to delete.")
+        else:
+            st.warning("You need to log in to delete history.")
+
+    elif choice == "Delete Account":
+        if st.session_state["user_id"]:
+            st.header("Delete Account")
+            if st.button("Confirm Delete Account"):
+                delete_account(st.session_state["user_id"])
+        else:
+            st.warning("You need to log in to delete your account.")
 
     elif choice == "About":
+        st.header("About")
         st.write("This project demonstrates an anime-specific chatbot built using NLP techniques.")
         st.subheader("Overview:")
         st.write("""
