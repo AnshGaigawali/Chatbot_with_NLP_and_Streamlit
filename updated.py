@@ -1,12 +1,8 @@
 import os
-import json
 import re
+import json
 import streamlit as st
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics.pairwise import cosine_similarity
-import joblib
-import nltk
+import requests
 from pymongo import MongoClient
 import bcrypt
 import logging
@@ -25,63 +21,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Paths and constants
-MODEL_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/chatbot_model1.pkl'
-VECTORIZER_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/vectorizer1.pkl'
-INTENT_FILE_PATH = 'C:/Users/USER/Desktop/Project/ChatBot/top_1000_anime.json'
+FLASK_API_URL = "http://127.0.0.1:5000"
 DB_CONNECTION_STRING = "mongodb+srv://anshgaigawali:anshtini@cluster2.l7iru.mongodb.net/animechatbot?retryWrites=true&w=majority&appName=Cluster2"
 
-# Load NLTK data
-nltk.data.path.append(os.path.abspath("nltk_data"))
-
-# Load intents from JSON file
-def load_data():
-    try:
-        with open(INTENT_FILE_PATH, "r", encoding="utf-8") as file:
-            intents = json.load(file)
-    except FileNotFoundError:
-        st.error("JSON file not found. Please ensure the file path is correct.")
-        return [], [], []
-    except json.JSONDecodeError:
-        st.error("Error decoding JSON file.")
-        return [], [], []
-
-    tags, patterns, responses = [], [], []
-    for intent in intents:
-        for pattern in intent['patterns']:
-            if pattern:
-                tags.append(intent['tag'])
-                patterns.append(pattern.lower())
-                responses.append(intent['responses'])
-    return tags, patterns, responses
-
-tags, patterns, responses = load_data()
-
-# Load or train model and vectorizer
-if os.path.exists(MODEL_PATH) and os.path.exists(VECTORIZER_PATH):
-    try:
-        clf = joblib.load(MODEL_PATH)
-        vectorizer = joblib.load(VECTORIZER_PATH)
-    except Exception as e:
-        st.error(f"Error loading model/vectorizer: {e}")
-else:
-    try:
-        vectorizer = TfidfVectorizer()
-        clf = LogisticRegression(random_state=0, max_iter=10000)
-        x = vectorizer.fit_transform(patterns)
-        clf.fit(x, tags)
-        joblib.dump(clf, MODEL_PATH)
-        joblib.dump(vectorizer, VECTORIZER_PATH)
-    except Exception as e:
-        st.error(f"Error training model/vectorizer: {e}")
-
-def normalize_input(input_text):
-    return re.sub(r"[^a-zA-Z0-9\s]", "", input_text.lower())
-
-def find_best_response(input_text):
-    input_vec = vectorizer.transform([normalize_input(input_text)])
-    max_similarity_index = cosine_similarity(input_vec, vectorizer.transform(patterns)).flatten().argmax()
-    return "\n".join(responses[max_similarity_index])
-
+# MongoDB connection
 client = MongoClient(DB_CONNECTION_STRING)
 db = client['animechatbot']
 users_collection = db['users']
@@ -114,14 +57,25 @@ def delete_account(user_id):
         st.error("Failed to delete the account. Please try again.")
 
 def chatbot(input_text, user_id=None):
-    response = find_best_response(input_text)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if user_id:
-        users_collection.update_one(
-            {"_id": ObjectId(user_id)},
-            {"$push": {"history": {"user_input": input_text, "response": response, "timestamp": timestamp}}}
-        )
-    return response
+    url = f"{FLASK_API_URL}/chat"
+    payload = {
+        "input": input_text,
+        "user_id": user_id
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        response_json = response.json()
+        if "error" in response_json:
+            st.error(f"Server error: {response_json['error']}")
+            return ""
+        return response_json.get("response", "")
+    except requests.exceptions.RequestException as e:
+        st.error(f"An error occurred: {e}")
+        return ""
+    except ValueError as e:
+        st.error(f"Error parsing JSON response: {e}")
+        return ""
 
 def authentication_page():
     st.header("Anime Chatbot Authentication")
@@ -181,22 +135,26 @@ def main():
         if st.session_state["user_id"]:
             st.header("Conversation History")
             user_doc = users_collection.find_one({"_id": ObjectId(st.session_state["user_id"])})
-            if user_doc and "history" in user_doc:
+            if user_doc and "history" in user_doc and user_doc["history"]:
                 user_history = user_doc["history"]
                 for history in user_history:
                     st.text(f"User: {history['user_input']}\nChatbot: {history['response']}\nTimestamp: {history['timestamp']}")
                     st.markdown("---")
             else:
-                st.warning("No conversation history found for this user.")
+                st.warning("No conversation history found for this user.") # Add this line to show a warning
         else:
             st.warning("You need to log in to see conversation history.")
 
     elif choice == "Delete History":
         if st.session_state["user_id"]:
             st.header("Delete Conversation History")
-            if st.button("Delete history"):
-                users_collection.update_one({"_id": ObjectId(st.session_state["user_id"])}, {"$set": {"history": []}})
-                st.success("Conversation history deleted for the current user.")
+            user_doc = users_collection.find_one({"_id": ObjectId(st.session_state["user_id"])})
+            if user_doc and "history" in user_doc and user_doc["history"]:
+                if st.button("Delete history"):
+                    users_collection.update_one({"_id": ObjectId(st.session_state["user_id"])}, {"$set": {"history": []}})
+                    st.success("Conversation history deleted for the current user.")
+            else:
+                st.warning("No conversation history to delete.")
         else:
             st.warning("You need to log in to delete history.")
 
